@@ -314,10 +314,29 @@ function generateRandomGrid(size: number): {
 		}),
 	);
 
+	// After building the annotated grid, recompute counts dynamically
+	// Count how many cells in the grid are tagged with each eq key
+	const eqCounts: Record<string, number> = {};
+	for (let r = 0; r < size; r++) {
+		for (let c = 0; c < size; c++) {
+			const cell = grid[r][c];
+			const { value, eqs } = parseCell(cell);
+			if (value === "B" || isSymbol(value as Symbol) || value === "=") continue;
+			for (const eqKey of eqs) {
+				eqCounts[eqKey] = (eqCounts[eqKey] ?? 0) + 1;
+			}
+		}
+	}
+
+	// Update equations with correct counts
+	for (const eqKey of Object.keys(equations)) {
+		const coordPart = equations[eqKey].split("|")[1] ?? "";
+		const count = eqCounts[eqKey] ?? 0;
+		equations[eqKey] = `${count}|${coordPart}`;
+	}
+
 	return { grid, equations };
 }
-
-// ── Saved grids (localStorage) ────────────────────────────────────────────────
 
 interface SavedGrid {
 	id: string;
@@ -362,6 +381,7 @@ const SavedSidebar: FC<SavedSidebarProps> = ({
 	onClearAll,
 }) => (
 	<div
+		className="saved-sidebar"
 		style={{
 			width: 210,
 			background: "#0a0a1a",
@@ -1552,7 +1572,22 @@ const GridEditor: FC = () => {
 	function handleExportAll(): void {
 		const lines: string[] = ["const levels = ["];
 		saved.forEach((s, idx) => {
-			const data = deriveExport(s.grid, s.equations, s.missingNumbers);
+			// Recompute equation counts for this saved grid
+			const liveEquations: Equations = { ...s.equations };
+			const eqCounts: Record<string, number> = {};
+			for (const row of s.grid) {
+				for (const cell of row) {
+					const { value, eqs } = parseCell(cell);
+					if (value === "B" || isSymbol(value) || value === "=") continue;
+					for (const k of eqs) eqCounts[k] = (eqCounts[k] ?? 0) + 1;
+				}
+			}
+			for (const k of Object.keys(liveEquations)) {
+				const coordPart = liveEquations[k].split("|")[1] ?? "";
+				liveEquations[k] = `${eqCounts[k] ?? 0}|${coordPart}`;
+			}
+
+			const data = deriveExport(s.grid, liveEquations, s.missingNumbers);
 			lines.push(`  // ${s.name}`);
 			lines.push("  {");
 			lines.push(`    missingNumbers: [${data.missingNumbers.join(", ")}],`);
@@ -1590,7 +1625,23 @@ const GridEditor: FC = () => {
 		const slicedGrid: Grid = grid
 			.slice(0, gridSize)
 			.map((row) => row.slice(0, gridSize));
-		const data = deriveExport(slicedGrid, equations, missingNumbers);
+
+		// Recompute equation counts from the actual grid cells
+		const liveEquations: Equations = { ...equations };
+		const eqCounts: Record<string, number> = {};
+		for (let r = 0; r < gridSize; r++) {
+			for (let c = 0; c < gridSize; c++) {
+				const { value, eqs } = parseCell(slicedGrid[r][c]);
+				if (value === "B" || isSymbol(value) || value === "=") continue;
+				for (const k of eqs) eqCounts[k] = (eqCounts[k] ?? 0) + 1;
+			}
+		}
+		for (const k of Object.keys(liveEquations)) {
+			const coordPart = liveEquations[k].split("|")[1] ?? "";
+			liveEquations[k] = `${eqCounts[k] ?? 0}|${coordPart}`;
+		}
+
+		const data = deriveExport(slicedGrid, liveEquations, missingNumbers);
 		const lines: string[] = [];
 		lines.push("{");
 		lines.push(`  missingNumbers: [${data.missingNumbers.join(", ")}],`);
@@ -1628,15 +1679,35 @@ const GridEditor: FC = () => {
 	return (
 		<div
 			style={{
-				height: "100vh",
+				height: "100dvh",
+				width: "100vw",
 				background: "#0a0a1a",
 				display: "flex",
 				flexDirection: "column",
 				overflow: "hidden",
 				fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+				boxSizing: "border-box",
 			}}
 		>
-			<style>{`@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`}</style>
+			<style>{`
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body, #root { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #1e1e3a; border-radius: 4px; }
+        @media (max-width: 900px) {
+          .saved-sidebar { display: none !important; }
+        }
+        @media (max-width: 700px) {
+          .right-panel { width: 200px !important; }
+          .header-size-selector { display: none !important; }
+        }
+        @media (max-width: 520px) {
+          .right-panel { display: none !important; }
+          .header-tabs { display: none !important; }
+        }
+      `}</style>
 			{/* Header */}
 			<div
 				style={{
@@ -1668,6 +1739,7 @@ const GridEditor: FC = () => {
 
 				{/* Grid size selector */}
 				<div
+					className="header-size-selector"
 					style={{
 						display: "flex",
 						alignItems: "center",
@@ -1710,6 +1782,7 @@ const GridEditor: FC = () => {
 
 				{/* Tabs */}
 				<div
+					className="header-tabs"
 					style={{
 						display: "flex",
 						gap: 2,
@@ -1808,7 +1881,16 @@ const GridEditor: FC = () => {
 				/>
 
 				{/* Grid */}
-				<div style={{ flex: 1, padding: 20, overflow: "auto" }}>
+				<div
+					style={{
+						flex: 1,
+						minWidth: 0,
+						padding: "16px 20px",
+						overflow: "auto",
+						display: "flex",
+						flexDirection: "column",
+					}}
+				>
 					{/* Eq legend */}
 					{eqKeys.length > 0 && (
 						<div
@@ -2130,6 +2212,7 @@ const GridEditor: FC = () => {
 
 				{/* Right panel */}
 				<div
+					className="right-panel"
 					style={{
 						width: 290,
 						background: "#0d0d1f",
