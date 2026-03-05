@@ -6,6 +6,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { CORRETOS } from "./constants/funcionais";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -63,8 +64,8 @@ function isSymbol(v: string): v is Symbol {
 function cellBg(value: string, selected: boolean): string {
   if (selected) return "#1a1a5a";
   if (value === "B") return "#1a1a2e";
-  if (isSymbol(value)) return "#2d2d44";
-  return "#0f3460";
+  if (isSymbol(value)) return "#3a3a58";
+  return "#1a4a80";
 }
 
 function cellBorder(value: string, selected: boolean): string {
@@ -75,8 +76,8 @@ function cellBorder(value: string, selected: boolean): string {
 }
 
 function cellColor(value: string): string {
-  if (value === "B") return "#333355";
-  if (isSymbol(value)) return "#a0a0c0";
+  if (value === "B") return "#6e6e9a";
+  if (isSymbol(value)) return "#b8b8d8";
   return "#e2f0ff";
 }
 
@@ -374,244 +375,588 @@ function persistSaved(list: SavedGrid[]): void {
   localStorage.setItem(LS_KEY, JSON.stringify(list));
 }
 
+// ── Imported level type ───────────────────────────────────────────────────────
+
+interface ImportedLevel {
+  id: string;
+  name: string; // "Level 1", "Level 2", etc.
+  fileName: string; // original file name
+  gridSize: number;
+  grid: Grid;
+  equations: Equations;
+  missingNumbers: number[];
+}
+
+// ── parseImportFile ───────────────────────────────────────────────────────────
+// Accepts .ts/.js/.json text and returns an array of ImportedLevel.
+// Handles:
+//   const levels = [ { grid, equations, missingNumbers }, ... ]
+//   export default [ ... ]
+//   [ { grid, equations, missingNumbers }, ... ]   (plain JSON array)
+
+function parseImportFile(text: string, fileName: string): ImportedLevel[] {
+  // Strip JS/TS noise: extract the first [...] that contains objects
+  // Strategy: find the outermost [...] array literal or JSON array
+  let jsonText = text;
+
+  // Remove single-line and multi-line comments
+  jsonText = jsonText
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+
+  // Find the start of the first top-level array
+  const arrStart = jsonText.indexOf("[");
+  if (arrStart === -1) return [];
+  jsonText = jsonText.slice(arrStart);
+
+  // Find matching closing bracket
+  let depth = 0;
+  let end = -1;
+  for (let i = 0; i < jsonText.length; i++) {
+    if (jsonText[i] === "[" || jsonText[i] === "{") depth++;
+    else if (jsonText[i] === "]" || jsonText[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) return [];
+  jsonText = jsonText.slice(0, end + 1);
+
+  // Convert JS object literal syntax to JSON:
+  // - Remove trailing commas
+  // - Quote unquoted keys
+  jsonText = jsonText
+    .replace(/,\s*([\]}])/g, "$1") // trailing commas
+    .replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)/g, '$1"$2"$3'); // unquoted keys
+
+  let raw: unknown[];
+  try {
+    raw = JSON.parse(jsonText) as unknown[];
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(raw)) return [];
+
+  const results: ImportedLevel[] = [];
+
+  raw.forEach((item, idx) => {
+    if (typeof item !== "object" || item === null) return;
+    const obj = item as Record<string, unknown>;
+
+    const grid = obj["grid"];
+    const equations = obj["equations"];
+    const missingNumbers = obj["missingNumbers"];
+
+    if (!Array.isArray(grid)) return;
+
+    // Infer grid size
+    const rowCount = grid.length;
+    const colCount = Array.isArray(grid[0]) ? (grid[0] as unknown[]).length : 0;
+    const size = Math.max(rowCount, colCount);
+
+    const typedGrid: Grid = (grid as unknown[][]).map((row) =>
+      (row as string[]).map((c) => String(c)),
+    );
+    const typedEqs: Equations =
+      typeof equations === "object" && equations !== null
+        ? Object.fromEntries(
+            Object.entries(equations as Record<string, unknown>).map(
+              ([k, v]) => [k, String(v)],
+            ),
+          )
+        : {};
+    const typedMissing: number[] = Array.isArray(missingNumbers)
+      ? (missingNumbers as unknown[]).map(Number)
+      : [];
+
+    results.push({
+      id: `imp-${Date.now()}-${idx}-${Math.random().toString(36).slice(2)}`,
+      name: `Level ${idx + 1}`,
+      fileName,
+      gridSize: size,
+      grid: typedGrid,
+      equations: typedEqs,
+      missingNumbers: typedMissing,
+    });
+  });
+
+  return results;
+}
+
+// ── MiniGridPreview ───────────────────────────────────────────────────────────
+
+interface MiniGridPreviewProps {
+  grid: Grid;
+  gridSize: number;
+}
+
+const MiniGridPreview: FC<MiniGridPreviewProps> = ({ grid, gridSize }) => (
+  <div
+    style={{
+      padding: "8px 10px 6px",
+      display: "grid",
+      gridTemplateColumns: `repeat(${gridSize}, 1fr)`,
+      gap: 2,
+    }}
+  >
+    {grid.slice(0, gridSize).map((row, r) =>
+      row.slice(0, gridSize).map((cell, c) => {
+        const { value } = parseCell(cell);
+        const isB = value === "B";
+        const isOp = isSymbol(value as Symbol) || value === "=";
+        return (
+          <div
+            key={`${r}-${c}`}
+            style={{
+              width: "100%",
+              aspectRatio: "1",
+              borderRadius: 3,
+              background: isB ? "#1a1a35" : isOp ? "#363650" : "#1a4a8a",
+              fontSize: Math.max(5, 9 - gridSize),
+              color: isB ? "transparent" : isOp ? "#9090c0" : "#c0d8ff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 700,
+            }}
+          >
+            {isB ? "" : value.length > 2 ? "·" : value}
+          </div>
+        );
+      }),
+    )}
+  </div>
+);
+
 // ── SavedSidebar ──────────────────────────────────────────────────────────────
 
 interface SavedSidebarProps {
   saved: SavedGrid[];
+  imported: ImportedLevel[];
   onLoad: (s: SavedGrid) => void;
   onDelete: (id: string) => void;
   onExportAll: () => void;
   onClearAll: () => void;
+  onLoadImported: (level: ImportedLevel) => void;
+  onDeleteImported: (id: string) => void;
+  onClearImported: () => void;
+  editingImportedId: string | null;
 }
 
 const SavedSidebar: FC<SavedSidebarProps> = ({
   saved,
+  imported,
   onLoad,
   onDelete,
   onExportAll,
   onClearAll,
-}) => (
-  <div
-    className="saved-sidebar"
-    style={{
-      width: 210,
-      background: "#0a0a1a",
-      borderRight: "1px solid #1a1a30",
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden",
-      flexShrink: 0,
-    }}
-  >
+  onLoadImported,
+  onDeleteImported,
+  onClearImported,
+  editingImportedId,
+}) => {
+  const [tab, setTab] = useState<"saved" | "imported">("saved");
+
+  return (
     <div
+      className="saved-sidebar"
       style={{
-        padding: "14px 16px 12px",
-        borderBottom: "1px solid #1a1a30",
+        width: 220,
+        background: "#0f0f22",
+        borderRight: "1px solid #1a1a30",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
         flexShrink: 0,
       }}
     >
+      {/* Tab switcher */}
       <div
         style={{
-          color: "#333355",
-          fontSize: 9,
-          letterSpacing: 2,
-          marginBottom: 3,
-        }}
-      >
-        LIBRARY
-      </div>
-      <div style={{ color: "#e2f0ff", fontSize: 14, fontWeight: 700 }}>
-        💾 SAVED
-      </div>
-    </div>
-
-    {saved.length > 0 && (
-      <div
-        style={{
-          padding: "8px 12px",
+          padding: "10px 10px 0",
           borderBottom: "1px solid #1a1a30",
-          display: "flex",
-          gap: 6,
           flexShrink: 0,
+          display: "flex",
+          gap: 4,
         }}
       >
         <button
-          onClick={onExportAll}
+          onClick={() => setTab("saved")}
           style={{
             flex: 1,
-            padding: "6px 0",
-            borderRadius: 7,
+            padding: "7px 4px",
+            borderRadius: "7px 7px 0 0",
             cursor: "pointer",
-            background: "#6366f115",
-            border: "1px solid #6366f135",
-            color: "#6366f1",
+            background: tab === "saved" ? "#131325" : "transparent",
+            border:
+              tab === "saved" ? "1px solid #1a1a30" : "1px solid transparent",
+            borderBottom:
+              tab === "saved" ? "1px solid #0d0d1f" : "1px solid transparent",
+            color: tab === "saved" ? "#e2f0ff" : "#6e6e9a",
             fontSize: 9,
-            fontWeight: 700,
+            fontWeight: tab === "saved" ? 700 : 400,
             letterSpacing: 1,
+            marginBottom: -1,
+            transition: "all .15s",
           }}
         >
-          ↗ EXPORT ALL
+          💾 SAVED{saved.length > 0 ? ` (${saved.length})` : ""}
         </button>
         <button
-          onClick={onClearAll}
+          onClick={() => setTab("imported")}
           style={{
-            padding: "6px 9px",
-            borderRadius: 7,
+            flex: 1,
+            padding: "7px 4px",
+            borderRadius: "7px 7px 0 0",
             cursor: "pointer",
-            background: "#ef444415",
-            border: "1px solid #ef444435",
-            color: "#ef4444",
+            background: tab === "imported" ? "#131325" : "transparent",
+            border:
+              tab === "imported"
+                ? "1px solid #1a1a30"
+                : "1px solid transparent",
+            borderBottom:
+              tab === "imported"
+                ? "1px solid #0d0d1f"
+                : "1px solid transparent",
+            color: tab === "imported" ? "#f97316" : "#6e6e9a",
             fontSize: 9,
-            fontWeight: 700,
+            fontWeight: tab === "imported" ? 700 : 400,
             letterSpacing: 1,
+            marginBottom: -1,
+            transition: "all .15s",
           }}
         >
-          🗑 ALL
+          📥 IMPORT{imported.length > 0 ? ` (${imported.length})` : ""}
         </button>
       </div>
-    )}
 
-    <div
-      style={{
-        flex: 1,
-        overflowY: "auto",
-        padding: "10px 12px",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
-      {saved.length === 0 && (
-        <div
-          style={{
-            color: "#252540",
-            fontSize: 10,
-            textAlign: "center",
-            paddingTop: 28,
-            lineHeight: 2,
-          }}
-        >
-          no grids saved yet
-          <br />
-          <span style={{ color: "#1e1e38", fontSize: 9 }}>
-            use SAVE below the grid
-          </span>
-        </div>
-      )}
-
-      {saved.map((s) => {
-        const d = new Date(s.savedAt);
-        const dateStr = `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-        const eqCount = Object.keys(s.equations).length;
-
-        return (
-          <div
-            key={s.id}
-            style={{
-              background: "#0d0d1f",
-              border: "1px solid #1a1a30",
-              borderRadius: 10,
-              overflow: "hidden",
-            }}
-          >
+      {/* ── SAVED tab ── */}
+      {tab === "saved" && (
+        <>
+          {saved.length > 0 && (
             <div
               style={{
-                padding: "8px 10px 6px",
-                display: "grid",
-                gridTemplateColumns: `repeat(${s.gridSize}, 1fr)`,
-                gap: 2,
+                padding: "8px 12px",
+                borderBottom: "1px solid #1a1a30",
+                display: "flex",
+                gap: 6,
+                flexShrink: 0,
               }}
             >
-              {s.grid.slice(0, s.gridSize).map((row, r) =>
-                row.slice(0, s.gridSize).map((cell, c) => {
-                  const { value } = parseCell(cell);
-                  const isB = value === "B";
-                  const isOp = isSymbol(value as Symbol) || value === "=";
-                  return (
-                    <div
-                      key={`${r}-${c}`}
-                      style={{
-                        width: "100%",
-                        aspectRatio: "1",
-                        borderRadius: 3,
-                        background: isB
-                          ? "#111122"
-                          : isOp
-                            ? "#2a2a3a"
-                            : "#0f3060",
-                        fontSize: Math.max(5, 9 - s.gridSize),
-                        color: isB
-                          ? "transparent"
-                          : isOp
-                            ? "#7070a0"
-                            : "#a0c0ff",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {isB ? "" : value.length > 2 ? "·" : value}
-                    </div>
-                  );
-                }),
-              )}
-            </div>
-
-            <div style={{ padding: "4px 10px 8px" }}>
-              <div
+              <button
+                onClick={onExportAll}
                 style={{
-                  color: "#a0a0c0",
-                  fontSize: 11,
+                  flex: 1,
+                  padding: "6px 0",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  background: "#6366f115",
+                  border: "1px solid #6366f135",
+                  color: "#6366f1",
+                  fontSize: 9,
                   fontWeight: 700,
-                  marginBottom: 1,
+                  letterSpacing: 1,
                 }}
               >
-                {s.name}
-              </div>
-              <div style={{ color: "#333355", fontSize: 8, marginBottom: 6 }}>
-                {s.gridSize}×{s.gridSize} · {eqCount} eq · {dateStr}
-              </div>
-              <div style={{ display: "flex", gap: 5 }}>
-                <button
-                  onClick={() => onLoad(s)}
-                  style={{
-                    flex: 1,
-                    padding: "5px 0",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    background: "#6366f115",
-                    border: "1px solid #6366f135",
-                    color: "#6366f1",
-                    fontSize: 9,
-                    fontWeight: 700,
-                    letterSpacing: 1,
-                  }}
-                >
-                  LOAD
-                </button>
-                <button
-                  onClick={() => onDelete(s.id)}
-                  style={{
-                    padding: "5px 9px",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    background: "transparent",
-                    border: "1px solid #1e1e3a",
-                    color: "#333355",
-                    fontSize: 12,
-                  }}
-                >
-                  ×
-                </button>
-              </div>
+                ↗ EXPORT ALL
+              </button>
+              <button
+                onClick={onClearAll}
+                style={{
+                  padding: "6px 9px",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  background: "#ef444415",
+                  border: "1px solid #ef444435",
+                  color: "#ef4444",
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                }}
+              >
+                🗑
+              </button>
             </div>
+          )}
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "10px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            {saved.length === 0 && (
+              <div
+                style={{
+                  color: "#5a5a80",
+                  fontSize: 10,
+                  textAlign: "center",
+                  paddingTop: 28,
+                  lineHeight: 2,
+                }}
+              >
+                no grids saved yet
+                <br />
+                <span style={{ color: "#50507a", fontSize: 9 }}>
+                  use SAVE below the grid
+                </span>
+              </div>
+            )}
+            {saved.map((s) => {
+              const d = new Date(s.savedAt);
+              const dateStr = `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+              const eqCount = Object.keys(s.equations).length;
+              return (
+                <div
+                  key={s.id}
+                  style={{
+                    background: "#131325",
+                    border: "1px solid #1a1a30",
+                    borderRadius: 10,
+                    overflow: "hidden",
+                  }}
+                >
+                  <MiniGridPreview grid={s.grid} gridSize={s.gridSize} />
+                  <div style={{ padding: "4px 10px 8px" }}>
+                    <div
+                      style={{
+                        color: "#b8b8d8",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        marginBottom: 1,
+                      }}
+                    >
+                      {s.name}
+                    </div>
+                    <div
+                      style={{ color: "#6e6e9a", fontSize: 8, marginBottom: 6 }}
+                    >
+                      {s.gridSize}×{s.gridSize} · {eqCount} eq · {dateStr}
+                    </div>
+                    <div style={{ display: "flex", gap: 5 }}>
+                      <button
+                        onClick={() => onLoad(s)}
+                        style={{
+                          flex: 1,
+                          padding: "5px 0",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: "#6366f115",
+                          border: "1px solid #6366f135",
+                          color: "#6366f1",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: 1,
+                        }}
+                      >
+                        LOAD
+                      </button>
+                      <button
+                        onClick={() => onDelete(s.id)}
+                        style={{
+                          padding: "5px 9px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: "transparent",
+                          border: "1px solid #1e1e3a",
+                          color: "#6e6e9a",
+                          fontSize: 12,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
+        </>
+      )}
+
+      {/* ── IMPORTED tab ── */}
+      {tab === "imported" && (
+        <>
+          {imported.length > 0 && (
+            <div
+              style={{
+                padding: "8px 12px",
+                borderBottom: "1px solid #1a1a30",
+                display: "flex",
+                gap: 6,
+                flexShrink: 0,
+                alignItems: "center",
+              }}
+            >
+              <span
+                style={{
+                  color: "#6e6e9a",
+                  fontSize: 9,
+                  flex: 1,
+                  letterSpacing: 1,
+                }}
+              >
+                {imported.length} level{imported.length !== 1 ? "s" : ""}
+              </span>
+              <button
+                onClick={onClearImported}
+                style={{
+                  padding: "6px 9px",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  background: "#ef444415",
+                  border: "1px solid #ef444435",
+                  color: "#ef4444",
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                }}
+              >
+                🗑 ALL
+              </button>
+            </div>
+          )}
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "10px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            {imported.length === 0 && (
+              <div
+                style={{
+                  color: "#5a5a80",
+                  fontSize: 10,
+                  textAlign: "center",
+                  paddingTop: 28,
+                  lineHeight: 2,
+                }}
+              >
+                no levels imported
+                <br />
+                <span style={{ color: "#50507a", fontSize: 9 }}>
+                  use 📥 IMPORT in the header
+                </span>
+              </div>
+            )}
+            {imported.map((lv) => {
+              const eqCount = Object.keys(lv.equations).length;
+              return (
+                <div
+                  key={lv.id}
+                  style={{
+                    background: "#131325",
+                    border: "1px solid #f9731620",
+                    borderRadius: 10,
+                  }}
+                >
+                  <MiniGridPreview grid={lv.grid} gridSize={lv.gridSize} />
+                  <div style={{ padding: "4px 10px 8px" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        marginBottom: 1,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "#f97316",
+                          fontSize: 11,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {lv.name}
+                      </span>
+                      {editingImportedId === lv.id && (
+                        <span
+                          style={{
+                            fontSize: 8,
+                            padding: "1px 5px",
+                            borderRadius: 4,
+                            background: "#f9731630",
+                            color: "#f97316",
+                            border: "1px solid #f9731650",
+                            letterSpacing: 1,
+                          }}
+                        >
+                          ✎ EDITING
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      style={{ color: "#6e6e9a", fontSize: 8, marginBottom: 2 }}
+                    >
+                      {lv.gridSize}×{lv.gridSize} · {eqCount} eq ·{" "}
+                      {lv.missingNumbers.length} missing
+                    </div>
+                    <div
+                      style={{
+                        color: "#5a5a80",
+                        fontSize: 7,
+                        marginBottom: 6,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {lv.fileName}
+                    </div>
+                    <div style={{ display: "flex", gap: 5 }}>
+                      <button
+                        onClick={() => onLoadImported(lv)}
+                        style={{
+                          flex: 1,
+                          padding: "5px 0",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: "#f9731615",
+                          border: "1px solid #f9731635",
+                          color: "#f97316",
+                          fontSize: 9,
+                          fontWeight: 700,
+                          letterSpacing: 1,
+                        }}
+                      >
+                        ✎ EDIT
+                      </button>
+                      <button
+                        onClick={() => onDeleteImported(lv.id)}
+                        style={{
+                          padding: "5px 9px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: "transparent",
+                          border: "1px solid #1e1e3a",
+                          color: "#6e6e9a",
+                          fontSize: 12,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
-  </div>
-);
+  );
+};
 
 interface CellPanelProps {
   r: number;
@@ -696,7 +1041,7 @@ const CellPanel: FC<CellPanelProps> = ({
   })();
 
   const label: CSSProperties = {
-    color: "#333355",
+    color: "#6e6e9a",
     fontSize: 10,
     letterSpacing: 2,
     marginBottom: 8,
@@ -734,7 +1079,7 @@ const CellPanel: FC<CellPanelProps> = ({
       >
         <div
           style={{
-            color: "#333355",
+            color: "#6e6e9a",
             fontSize: 10,
             letterSpacing: 2,
             marginBottom: 4,
@@ -769,8 +1114,8 @@ const CellPanel: FC<CellPanelProps> = ({
                   height: 40,
                   borderRadius: 8,
                   cursor: "pointer",
-                  background: val === s ? "#6366f120" : "#16162a",
-                  border: `1.5px solid ${val === s ? "#6366f1" : "#222240"}`,
+                  background: val === s ? "#6366f120" : "#1e1e38",
+                  border: `1.5px solid ${val === s ? "#6366f1" : "#363660"}`,
                   color: val === s ? "#6366f1" : "#666688",
                   fontSize: 16,
                   fontWeight: 700,
@@ -787,9 +1132,9 @@ const CellPanel: FC<CellPanelProps> = ({
                 height: 40,
                 borderRadius: 8,
                 cursor: "pointer",
-                background: val === "" ? "#ef444418" : "#16162a",
-                border: `1.5px solid ${val === "" ? "#ef4444" : "#222240"}`,
-                color: val === "" ? "#ef4444" : "#444466",
+                background: val === "" ? "#ef444418" : "#1e1e38",
+                border: `1.5px solid ${val === "" ? "#ef4444" : "#363660"}`,
+                color: val === "" ? "#ef4444" : "#9090c0",
                 fontSize: 10,
                 fontWeight: 700,
                 transition: "all .1s",
@@ -821,9 +1166,9 @@ const CellPanel: FC<CellPanelProps> = ({
                     height: 34,
                     borderRadius: 8,
                     cursor: "pointer",
-                    background: on ? col + "20" : "#16162a",
-                    border: `1.5px solid ${on ? col : "#222240"}`,
-                    color: on ? col : "#333355",
+                    background: on ? col + "20" : "#1e1e38",
+                    border: `1.5px solid ${on ? col : "#363660"}`,
+                    color: on ? col : "#6e6e9a",
                     fontSize: 10,
                     fontWeight: on ? 700 : 400,
                     transition: "all .12s",
@@ -840,7 +1185,7 @@ const CellPanel: FC<CellPanelProps> = ({
           <div style={label}>NÚMERO</div>
           <div
             style={{
-              background: "#10101f",
+              background: "#28284a",
               border: "1px solid #1a1a30",
               borderRadius: 8,
               padding: "8px 12px",
@@ -848,7 +1193,7 @@ const CellPanel: FC<CellPanelProps> = ({
               minHeight: 36,
               fontSize: 18,
               fontWeight: 700,
-              color: isSymbolVal ? "#444466" : "#e2f0ff",
+              color: isSymbolVal ? "#9090c0" : "#e2f0ff",
               letterSpacing: 2,
               textAlign: "right",
             }}
@@ -874,9 +1219,9 @@ const CellPanel: FC<CellPanelProps> = ({
                     height: 40,
                     borderRadius: 8,
                     cursor: "pointer",
-                    background: isBack ? "#ef444418" : "#16162a",
-                    border: `1.5px solid ${isBack ? "#ef444440" : "#222240"}`,
-                    color: isBack ? "#ef4444" : "#a0a0c0",
+                    background: isBack ? "#ef444418" : "#1e1e38",
+                    border: `1.5px solid ${isBack ? "#ef444440" : "#363660"}`,
+                    color: isBack ? "#ef4444" : "#b8b8d8",
                     fontSize: isBack ? 14 : 16,
                     fontWeight: 700,
                     transition: "all .1s",
@@ -963,9 +1308,9 @@ const CellPanel: FC<CellPanelProps> = ({
               style={{
                 padding: "8px 10px",
                 borderRadius: 8,
-                background: "#16162a",
+                background: "#1e1e38",
                 border: "1px dashed #222240",
-                color: "#333355",
+                color: "#6e6e9a",
                 fontSize: 10,
                 textAlign: "center",
               }}
@@ -979,7 +1324,7 @@ const CellPanel: FC<CellPanelProps> = ({
           <div style={label}>PREVIEW</div>
           <div
             style={{
-              background: "#10101f",
+              background: "#28284a",
               border: "1px solid #1a1a30",
               borderRadius: 8,
               padding: "9px 13px",
@@ -1017,7 +1362,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
   }
 
   const label: CSSProperties = {
-    color: "#333355",
+    color: "#6e6e9a",
     fontSize: 10,
     letterSpacing: 2,
   };
@@ -1040,7 +1385,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
       >
         <div
           style={{
-            color: "#333355",
+            color: "#6e6e9a",
             fontSize: 10,
             letterSpacing: 2,
             marginBottom: 4,
@@ -1066,7 +1411,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
         {Object.keys(equations).length === 0 && (
           <div
             style={{
-              color: "#252540",
+              color: "#5a5a80",
               fontSize: 11,
               textAlign: "center",
               paddingTop: 24,
@@ -1101,7 +1446,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
               onChange={(e) => onChange({ ...equations, [k]: e.target.value })}
               style={{
                 flex: 1,
-                background: "#16162a",
+                background: "#1e1e38",
                 border: "1px solid #222240",
                 borderRadius: 6,
                 color: "#e2f0ff",
@@ -1113,7 +1458,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
                 e.target.style.borderColor = EQ_COLORS[i % EQ_COLORS.length];
               }}
               onBlur={(e: FocusEvent<HTMLInputElement>) => {
-                e.target.style.borderColor = "#222240";
+                e.target.style.borderColor = "#363660";
               }}
             />
             <button
@@ -1126,7 +1471,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
                 background: "transparent",
                 border: "1px solid #1e1e3a",
                 borderRadius: 6,
-                color: "#333355",
+                color: "#6e6e9a",
                 padding: "4px 8px",
                 cursor: "pointer",
                 fontSize: 13,
@@ -1159,7 +1504,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
               }}
               style={{
                 width: 52,
-                background: "#16162a",
+                background: "#1e1e38",
                 border: "1px solid #222240",
                 borderRadius: 6,
                 color: "#e2f0ff",
@@ -1177,7 +1522,7 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
               }}
               style={{
                 flex: 1,
-                background: "#16162a",
+                background: "#1e1e38",
                 border: "1px solid #222240",
                 borderRadius: 6,
                 color: "#e2f0ff",
@@ -1207,11 +1552,11 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
 
         <div
           style={{
-            background: "#10101f",
+            background: "#28284a",
             border: "1px solid #1a1a30",
             borderRadius: 8,
             padding: "9px 12px",
-            color: "#252540",
+            color: "#5a5a80",
             fontSize: 9,
             lineHeight: 1.9,
           }}
@@ -1256,7 +1601,7 @@ const ExportPanel: FC<ExportPanelProps> = ({ content, onCopy, copied }) => (
       <div>
         <div
           style={{
-            color: "#333355",
+            color: "#6e6e9a",
             fontSize: 10,
             letterSpacing: 2,
             marginBottom: 4,
@@ -1271,8 +1616,8 @@ const ExportPanel: FC<ExportPanelProps> = ({ content, onCopy, copied }) => (
       <button
         onClick={onCopy}
         style={{
-          background: copied ? "#10b98118" : "#16162a",
-          border: `1.5px solid ${copied ? "#10b98160" : "#222240"}`,
+          background: copied ? "#10b98118" : "#1e1e38",
+          border: `1.5px solid ${copied ? "#10b98160" : "#363660"}`,
           borderRadius: 8,
           color: copied ? "#10b981" : "#666688",
           padding: "6px 13px",
@@ -1320,6 +1665,29 @@ const GridEditor: FC = () => {
   const [copied, setCopied] = useState<boolean>(false);
   const [saved, setSaved] = useState<SavedGrid[]>(() => loadSaved());
   const [saveLabel, setSaveLabel] = useState<string>("");
+  const [imported, setImported] = useState<ImportedLevel[]>([]);
+  const [importError, setImportError] = useState<string>("");
+  const [editingImportedId, setEditingImportedId] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const formatFile: ImportedLevel[] = CORRETOS.map((item, idx) => {
+      const rowCount = item.grid.length;
+      const colCount = rowCount > 0 ? item.grid[0].length : 0;
+      const gridSize = Math.max(rowCount, colCount);
+      return {
+        id: `corretos-${idx}`,
+        name: `Level ${idx + 1}`,
+        fileName: "funcionais.ts",
+        gridSize,
+        grid: item.grid,
+        equations: item.equations,
+        missingNumbers: item.missingNumbers,
+      };
+    });
+    setImported(formatFile);
+  }, []);
 
   // ── Drag-to-select state ──────────────────────────────────────────────────
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -1915,6 +2283,66 @@ const GridEditor: FC = () => {
     });
   }
 
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>): void {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // allow re-importing same file
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const levels = parseImportFile(text, file.name);
+      if (levels.length === 0) {
+        setImportError(`No levels found in "${file.name}"`);
+        setTimeout(() => setImportError(""), 3500);
+        return;
+      }
+      setImported((prev) => {
+        // Avoid duplicates by id prefix (same file re-imported replaces old)
+        const filtered = prev.filter((l) => l.fileName !== file.name);
+        return [...filtered, ...levels];
+      });
+    };
+    reader.readAsText(file);
+  }
+
+  function handleLoadImported(level: ImportedLevel): void {
+    setGridSize(level.gridSize);
+    setGrid(level.grid);
+    setEquations(level.equations);
+    setMissingNumbers(level.missingNumbers);
+    setSelected({ r: 0, c: 0 });
+    setExported("— click EXPORT to generate —");
+    setEditingImportedId(level.id);
+  }
+
+  function handleUpdateImported(): void {
+    if (!editingImportedId) return;
+    setImported((prev) =>
+      prev.map((lv) =>
+        lv.id === editingImportedId
+          ? {
+              ...lv,
+              gridSize,
+              grid: grid
+                .slice(0, gridSize)
+                .map((row) => row.slice(0, gridSize)),
+              equations,
+              missingNumbers,
+            }
+          : lv,
+      ),
+    );
+  }
+
+  function handleDeleteImported(id: string): void {
+    setImported((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  function handleClearImported(): void {
+    if (!confirm(`Clear all ${imported.length} imported levels?`)) return;
+    setImported([]);
+  }
+
   const eqKeys = Object.keys(equations);
 
   const tabs: { id: PanelId; label: string }[] = [
@@ -1928,7 +2356,7 @@ const GridEditor: FC = () => {
       style={{
         height: "100dvh",
         width: "100vw",
-        background: "#0a0a1a",
+        background: "#0f0f22",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -1942,7 +2370,7 @@ const GridEditor: FC = () => {
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
         ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #1e1e3a; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #3a3a60; border-radius: 4px; }
         @media (max-width: 900px) { .saved-sidebar { display: none !important; } }
         @media (max-width: 700px) { .right-panel { width: 200px !important; } .header-size-selector { display: none !important; } }
         @media (max-width: 520px) { .right-panel { display: none !important; } .header-tabs { display: none !important; } }
@@ -1951,7 +2379,7 @@ const GridEditor: FC = () => {
       {/* Header */}
       <div
         style={{
-          background: "#0d0d1f",
+          background: "#131325",
           borderBottom: "1px solid #1a1a30",
           padding: "11px 20px",
           display: "flex",
@@ -1961,7 +2389,7 @@ const GridEditor: FC = () => {
         }}
       >
         <div>
-          <div style={{ color: "#6366f140", fontSize: 9, letterSpacing: 3 }}>
+          <div style={{ color: "#6366f160", fontSize: 9, letterSpacing: 3 }}>
             MATHGRID
           </div>
           <div
@@ -1983,13 +2411,13 @@ const GridEditor: FC = () => {
             display: "flex",
             alignItems: "center",
             gap: 6,
-            background: "#0a0a1a",
+            background: "#0f0f22",
             border: "1px solid #1a1a30",
             borderRadius: 8,
             padding: "3px 10px 3px 6px",
           }}
         >
-          <span style={{ color: "#333355", fontSize: 9, letterSpacing: 2 }}>
+          <span style={{ color: "#6e6e9a", fontSize: 9, letterSpacing: 2 }}>
             SIZE
           </span>
           <div style={{ display: "flex", gap: 2 }}>
@@ -2007,7 +2435,7 @@ const GridEditor: FC = () => {
                   cursor: "pointer",
                   background: gridSize === s ? "#6366f1" : "transparent",
                   border: "none",
-                  color: gridSize === s ? "#fff" : "#333355",
+                  color: gridSize === s ? "#fff" : "#6e6e9a",
                   fontSize: 9,
                   fontWeight: gridSize === s ? 700 : 400,
                   transition: "all .15s",
@@ -2024,7 +2452,7 @@ const GridEditor: FC = () => {
           style={{
             display: "flex",
             gap: 2,
-            background: "#0a0a1a",
+            background: "#0f0f22",
             borderRadius: 8,
             padding: 3,
             border: "1px solid #1a1a30",
@@ -2040,7 +2468,7 @@ const GridEditor: FC = () => {
                 cursor: "pointer",
                 background: panel === tab.id ? "#6366f1" : "transparent",
                 border: "none",
-                color: panel === tab.id ? "#fff" : "#333355",
+                color: panel === tab.id ? "#fff" : "#6e6e9a",
                 fontSize: 10,
                 letterSpacing: 1,
                 fontWeight: panel === tab.id ? 700 : 400,
@@ -2067,6 +2495,31 @@ const GridEditor: FC = () => {
           }}
         >
           ⚄ RANDOM
+        </button>
+
+        {/* Hidden file input for import */}
+        <input
+          id="import-file-input"
+          type="file"
+          accept=".ts,.tsx,.js,.jsx,.json"
+          style={{ display: "none" }}
+          onChange={handleImportFile}
+        />
+        <button
+          onClick={() => document.getElementById("import-file-input")?.click()}
+          style={{
+            background: "#f9731618",
+            border: "1px solid #f9731640",
+            borderRadius: 8,
+            color: "#f97316",
+            padding: "7px 14px",
+            cursor: "pointer",
+            fontSize: 10,
+            letterSpacing: 1,
+            fontWeight: 700,
+          }}
+        >
+          📥 IMPORT
         </button>
 
         <button
@@ -2097,7 +2550,7 @@ const GridEditor: FC = () => {
             background: "transparent",
             border: "1px solid #1a1a30",
             borderRadius: 8,
-            color: "#252540",
+            color: "#5a5a80",
             padding: "7px 12px",
             cursor: "pointer",
             fontSize: 12,
@@ -2111,10 +2564,15 @@ const GridEditor: FC = () => {
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         <SavedSidebar
           saved={saved}
+          imported={imported}
           onLoad={handleLoadSaved}
           onDelete={handleDeleteSaved}
           onExportAll={handleExportAll}
           onClearAll={handleClearAll}
+          onLoadImported={handleLoadImported}
+          onDeleteImported={handleDeleteImported}
+          onClearImported={handleClearImported}
+          editingImportedId={editingImportedId}
         />
 
         {/* Grid */}
@@ -2163,7 +2621,7 @@ const GridEditor: FC = () => {
                 style={{
                   width: 46,
                   textAlign: "center",
-                  color: "#1e1e38",
+                  color: "#50507a",
                   fontSize: 9,
                   flexShrink: 0,
                 }}
@@ -2181,7 +2639,7 @@ const GridEditor: FC = () => {
               <div
                 style={{
                   width: 20,
-                  color: "#1e1e38",
+                  color: "#50507a",
                   fontSize: 9,
                   textAlign: "right",
                   paddingRight: 4,
@@ -2270,7 +2728,7 @@ const GridEditor: FC = () => {
                     ) : isBlank ? (
                       <span
                         style={{
-                          color: isSel ? "#6366f1" : "#181830",
+                          color: isSel ? "#6366f1" : "#28284a",
                           fontSize: isSel ? 20 : 16,
                           animation: isSel
                             ? "blink 1s step-end infinite"
@@ -2316,7 +2774,7 @@ const GridEditor: FC = () => {
           <div
             style={{
               marginTop: 14,
-              color: "#1e1e38",
+              color: "#50507a",
               fontSize: 9,
               lineHeight: 2,
               letterSpacing: 0.5,
@@ -2335,8 +2793,29 @@ const GridEditor: FC = () => {
               display: "flex",
               gap: 8,
               alignItems: "center",
+              flexWrap: "wrap",
             }}
           >
+            {/* UPDATE button — only when editing an imported level */}
+            {editingImportedId && (
+              <button
+                onClick={handleUpdateImported}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  cursor: "pointer",
+                  background: "#f9731620",
+                  border: "1.5px solid #f9731660",
+                  color: "#f97316",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ↩ UPDATE IMPORTED
+              </button>
+            )}
             <input
               type="text"
               value={saveLabel}
@@ -2347,7 +2826,7 @@ const GridEditor: FC = () => {
               placeholder="name (optional)..."
               style={{
                 flex: 1,
-                background: "#0d0d1f",
+                background: "#131325",
                 border: "1px solid #1a1a30",
                 borderRadius: 8,
                 color: "#e2f0ff",
@@ -2355,12 +2834,13 @@ const GridEditor: FC = () => {
                 fontSize: 11,
                 outline: "none",
                 maxWidth: 240,
+                minWidth: 80,
               }}
               onFocus={(e: FocusEvent<HTMLInputElement>) => {
                 e.target.style.borderColor = "#10b981";
               }}
               onBlur={(e: FocusEvent<HTMLInputElement>) => {
-                e.target.style.borderColor = "#1a1a30";
+                e.target.style.borderColor = "#2a2a48";
               }}
             />
             <button
@@ -2384,6 +2864,7 @@ const GridEditor: FC = () => {
                 setGrid(EMPTY_GRID(gridSize, gridSize));
                 setEquations({});
                 setMissingNumbers([]);
+                setEditingImportedId(null);
               }}
               style={{
                 padding: "8px 14px",
@@ -2401,6 +2882,31 @@ const GridEditor: FC = () => {
             </button>
           </div>
 
+          {/* Import error toast */}
+          {importError && (
+            <div
+              style={{
+                position: "fixed",
+                bottom: 24,
+                left: "50%",
+                transform: "translateX(-50%)",
+                background: "#ef444430",
+                border: "1.5px solid #ef4444",
+                borderRadius: 20,
+                padding: "6px 20px",
+                color: "#ef4444",
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 1,
+                pointerEvents: "none",
+                zIndex: 100,
+              }}
+            >
+              ⚠ {importError}
+            </div>
+          )}
+
+          {/* Drag counter badge */}
           {isDragging && (
             <div
               style={{
@@ -2413,7 +2919,7 @@ const GridEditor: FC = () => {
                     ? "#ef444430"
                     : dragCells.length === dragTarget
                       ? "#10b98130"
-                      : "#6366f130",
+                      : "#6366f150",
                 border: `1.5px solid ${
                   dragCells.length > dragTarget
                     ? "#ef4444"
@@ -2453,7 +2959,7 @@ const GridEditor: FC = () => {
           className="right-panel"
           style={{
             width: 290,
-            background: "#0d0d1f",
+            background: "#131325",
             borderLeft: "1px solid #1a1a30",
             display: "flex",
             flexDirection: "column",
