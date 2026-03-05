@@ -720,7 +720,6 @@ const SavedSidebar: FC<SavedSidebarProps> = ({
                     background: "#131325",
                     border: "1px solid #1a1a30",
                     borderRadius: 10,
-                    overflow: "hidden",
                   }}
                 >
                   <MiniGridPreview grid={s.grid} gridSize={s.gridSize} />
