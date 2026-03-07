@@ -1368,6 +1368,7 @@ interface EqPanelProps {
 const EqPanel: FC<EqPanelProps> = ({ equations, selected, grid, onChange }) => {
 	const [newKey, setNewKey] = useState<string>("");
 	const [newVal, setNewVal] = useState<string>("");
+	const [selectedEq, setSelectedEq] = useState<string | null>(null);
 
 	function addEq(): void {
 		const k = newKey.trim();
@@ -1401,6 +1402,32 @@ const EqPanel: FC<EqPanelProps> = ({ equations, selected, grid, onChange }) => {
 				return prev.slice(0, pipeIdx + 1) + newCoords;
 			}
 			return prev + `,${coordStr}`;
+		});
+	}
+
+	// Update the coordinates of the selected eq to use current cell as end coord
+	function changeCoord(which: "start" | "end" | "both"): void {
+		if (!selectedEq || !equations[selectedEq]) return;
+		const val = equations[selectedEq];
+		const pipeIdx = val.indexOf("|");
+		const countPart = pipeIdx !== -1 ? val.slice(0, pipeIdx) : "2";
+		const coordPart = pipeIdx !== -1 ? val.slice(pipeIdx + 1) : "";
+		const parts = coordPart.split(",");
+		let r1 = parts[0] ?? "0";
+		let c1 = parts[1] ?? "0";
+		let r2 = parts[2] ?? String(selR);
+		let c2 = parts[3] ?? String(selC);
+		if (which === "start" || which === "both") {
+			r1 = String(selR);
+			c1 = String(selC);
+		}
+		if (which === "end" || which === "both") {
+			r2 = String(selR);
+			c2 = String(selC);
+		}
+		onChange({
+			...equations,
+			[selectedEq]: `${countPart}|${r1},${c1},${r2},${c2}`,
 		});
 	}
 
@@ -1536,26 +1563,6 @@ const EqPanel: FC<EqPanelProps> = ({ equations, selected, grid, onChange }) => {
 							})
 						)}
 					</div>
-
-					{/* Add coords button */}
-					<button
-						onClick={insertCoord}
-						style={{
-							padding: "6px 10px",
-							borderRadius: 7,
-							cursor: "pointer",
-							background: "#6366f110",
-							border: "1px solid #6366f135",
-							color: "#6366f1",
-							fontSize: 9,
-							fontWeight: 700,
-							letterSpacing: 1,
-							textAlign: "left",
-							transition: "all .15s",
-						}}
-					>
-						+ ADD [{selR},{selC}] TO NEW EQ
-					</button>
 				</div>
 
 				{Object.keys(equations).length === 0 && (
@@ -1571,67 +1578,170 @@ const EqPanel: FC<EqPanelProps> = ({ equations, selected, grid, onChange }) => {
 					</div>
 				)}
 
-				{Object.entries(equations).map(([k, v], i) => (
-					<div
-						key={k}
-						style={{ display: "flex", gap: 7, alignItems: "center" }}
-					>
-						<span
+				{Object.entries(equations).map(([k, v], i) => {
+					const isSelEq = selectedEq === k;
+					const col = EQ_COLORS[i % EQ_COLORS.length];
+					return (
+						<div
+							key={k}
 							style={{
-								padding: "3px 8px",
-								borderRadius: 6,
-								fontSize: 10,
-								background: EQ_COLORS[i % EQ_COLORS.length] + "18",
-								color: EQ_COLORS[i % EQ_COLORS.length],
-								border: `1px solid ${EQ_COLORS[i % EQ_COLORS.length]}35`,
-								minWidth: 38,
-								textAlign: "center",
-								flexShrink: 0,
+								display: "flex",
+								flexDirection: "column",
+								gap: 4,
+								borderRadius: 8,
+								border: isSelEq
+									? `1.5px solid ${col}60`
+									: "1.5px solid transparent",
+								background: isSelEq ? col + "08" : "transparent",
+								padding: isSelEq ? "6px 6px 6px 6px" : "0",
+								transition: "all .15s",
 							}}
 						>
-							{k}
-						</span>
-						<input
-							value={v}
-							onChange={(e) => onChange({ ...equations, [k]: e.target.value })}
-							style={{
-								flex: 1,
-								background: "#1e1e38",
-								border: "1px solid #222240",
-								borderRadius: 6,
-								color: "#e2f0ff",
-								padding: "5px 9px",
-								fontSize: 11,
-								outline: "none",
-							}}
-							onFocus={(e: FocusEvent<HTMLInputElement>) => {
-								e.target.style.borderColor = EQ_COLORS[i % EQ_COLORS.length];
-							}}
-							onBlur={(e: FocusEvent<HTMLInputElement>) => {
-								e.target.style.borderColor = "#363660";
-							}}
-						/>
-						<button
-							onClick={() => {
-								const next = { ...equations };
-								delete next[k];
-								onChange(next);
-							}}
-							style={{
-								background: "transparent",
-								border: "1px solid #1e1e3a",
-								borderRadius: 6,
-								color: "#6e6e9a",
-								padding: "4px 8px",
-								cursor: "pointer",
-								fontSize: 13,
-								flexShrink: 0,
-							}}
-						>
-							×
-						</button>
-					</div>
-				))}
+							<div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+								<span
+									onClick={() => setSelectedEq(isSelEq ? null : k)}
+									style={{
+										padding: "3px 8px",
+										borderRadius: 6,
+										fontSize: 10,
+										background: isSelEq ? col + "30" : col + "18",
+										color: col,
+										border: `1px solid ${col}${isSelEq ? "80" : "35"}`,
+										minWidth: 38,
+										textAlign: "center",
+										flexShrink: 0,
+										cursor: "pointer",
+										fontWeight: isSelEq ? 700 : 400,
+										transition: "all .15s",
+									}}
+								>
+									{k}
+								</span>
+								<input
+									value={v}
+									onChange={(e) =>
+										onChange({ ...equations, [k]: e.target.value })
+									}
+									style={{
+										flex: 1,
+										background: "#1e1e38",
+										border: `1px solid ${isSelEq ? col + "50" : "#222240"}`,
+										borderRadius: 6,
+										color: "#e2f0ff",
+										padding: "5px 9px",
+										fontSize: 11,
+										outline: "none",
+									}}
+									onFocus={(e: FocusEvent<HTMLInputElement>) => {
+										e.target.style.borderColor = col;
+										setSelectedEq(k);
+									}}
+									onBlur={(e: FocusEvent<HTMLInputElement>) => {
+										e.target.style.borderColor = isSelEq
+											? col + "50"
+											: "#363660";
+									}}
+								/>
+								<button
+									onClick={() => {
+										const next = { ...equations };
+										delete next[k];
+										onChange(next);
+										if (selectedEq === k) setSelectedEq(null);
+									}}
+									style={{
+										background: "transparent",
+										border: "1px solid #1e1e3a",
+										borderRadius: 6,
+										color: "#6e6e9a",
+										padding: "4px 8px",
+										cursor: "pointer",
+										fontSize: 13,
+										flexShrink: 0,
+									}}
+								>
+									×
+								</button>
+							</div>
+							{/* Change coord controls — visible only when this eq is selected */}
+							{isSelEq && (
+								<div style={{ display: "flex", gap: 4, paddingLeft: 2 }}>
+									<div
+										style={{
+											flex: 1,
+											background: col + "12",
+											border: `1px solid ${col}30`,
+											borderRadius: 6,
+											padding: "4px 8px",
+											fontSize: 9,
+											color: col,
+											letterSpacing: 0.5,
+											display: "flex",
+											alignItems: "center",
+											gap: 4,
+										}}
+									>
+										<span style={{ opacity: 0.6 }}>cell:</span>
+										<span style={{ fontWeight: 700 }}>
+											[{selR},{selC}]
+										</span>
+									</div>
+									<button
+										onClick={() => changeCoord("start")}
+										title="Set as start coord (r1,c1)"
+										style={{
+											padding: "4px 8px",
+											borderRadius: 6,
+											cursor: "pointer",
+											background: col + "15",
+											border: `1px solid ${col}40`,
+											color: col,
+											fontSize: 8,
+											fontWeight: 700,
+											letterSpacing: 0.5,
+										}}
+									>
+										START
+									</button>
+									<button
+										onClick={() => changeCoord("end")}
+										title="Set as end coord (r2,c2)"
+										style={{
+											padding: "4px 8px",
+											borderRadius: 6,
+											cursor: "pointer",
+											background: col + "15",
+											border: `1px solid ${col}40`,
+											color: col,
+											fontSize: 8,
+											fontWeight: 700,
+											letterSpacing: 0.5,
+										}}
+									>
+										END
+									</button>
+									<button
+										onClick={() => changeCoord("both")}
+										title="Set both coords to current cell"
+										style={{
+											padding: "4px 8px",
+											borderRadius: 6,
+											cursor: "pointer",
+											background: col + "25",
+											border: `1px solid ${col}60`,
+											color: col,
+											fontSize: 8,
+											fontWeight: 700,
+											letterSpacing: 0.5,
+										}}
+									>
+										BOTH
+									</button>
+								</div>
+							)}
+						</div>
+					);
+				})}
 
 				<div
 					style={{
@@ -1644,6 +1754,25 @@ const EqPanel: FC<EqPanelProps> = ({ equations, selected, grid, onChange }) => {
 					}}
 				>
 					<div style={label}>ADD NEW</div>
+					<button
+						onClick={insertCoord}
+						style={{
+							padding: "6px 10px",
+							borderRadius: 7,
+							cursor: "pointer",
+							background: "#6366f110",
+							border: "1px solid #6366f135",
+							color: "#6366f1",
+							fontSize: 9,
+							fontWeight: 700,
+							letterSpacing: 1,
+							textAlign: "left",
+							transition: "all .15s",
+							width: "100%",
+						}}
+					>
+						+ USE CELL [{selR},{selC}] AS COORDS
+					</button>
 					<div style={{ display: "flex", gap: 7 }}>
 						<input
 							placeholder="eq1"
