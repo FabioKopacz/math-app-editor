@@ -10,8 +10,10 @@ import { CORRETOS } from "./constants/funcionais";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const MIN_SIZE = 5;
-const MAX_SIZE = 11;
+const MIN_ROWS = 5;
+const MAX_ROWS = 13;
+const MIN_COLS = 5;
+const MAX_COLS = 11;
 const SYMBOLS = ["+", "-", "x", "/", "="] as const;
 
 type Symbol = (typeof SYMBOLS)[number];
@@ -179,7 +181,8 @@ type Direction = "right" | "down";
 
 function tryPlaceEquation(
 	grid: Grid,
-	size: number,
+	numRows: number,
+	numCols: number,
 	startR: number,
 	startC: number,
 	dir: Direction,
@@ -190,7 +193,7 @@ function tryPlaceEquation(
 	for (let i = 0; i < 5; i++) {
 		const r = dir === "right" ? startR : startR + i;
 		const c = dir === "right" ? startC + i : startC;
-		if (r < 0 || r >= size || c < 0 || c >= size) return null;
+		if (r < 0 || r >= numRows || c < 0 || c >= numCols) return null;
 		cells.push({ r, c });
 	}
 
@@ -208,13 +211,17 @@ function tryPlaceEquation(
 	return cells;
 }
 
-function generateRandomGrid(size: number): {
+function generateRandomGrid(
+	rows: number,
+	cols: number,
+): {
 	grid: Grid;
 	equations: Equations;
 } {
+	const size = Math.min(rows, cols); // equations need 5 cells in a line
 	const targetEqs = rnd(5, 7);
-	const rawGrid: string[][] = Array.from({ length: size }, () =>
-		Array(size).fill("B"),
+	const rawGrid: string[][] = Array.from({ length: rows }, () =>
+		Array(cols).fill("B"),
 	);
 	const cellEqs: Map<string, string[]> = new Map();
 	const eqDefs: EqDef[] = [];
@@ -257,7 +264,8 @@ function generateRandomGrid(size: number): {
 					const startC = dir === "right" ? sc - newIdx : sc;
 					const result = tryPlaceEquation(
 						rawGrid,
-						size,
+						rows,
+						cols,
 						startR,
 						startC,
 						dir,
@@ -275,14 +283,17 @@ function generateRandomGrid(size: number): {
 		}
 
 		if (!placed) {
-			const maxStart = size - 5;
-			if (maxStart < 0) continue;
+			const maxStartR = rows - 5;
+			const maxStartC = cols - 5;
+			if (dir === "right" && maxStartC < 0) continue;
+			if (dir === "down" && maxStartR < 0) continue;
 			for (let t = 0; t < 30; t++) {
-				const startR = dir === "right" ? rnd(0, size - 1) : rnd(0, maxStart);
-				const startC = dir === "right" ? rnd(0, maxStart) : rnd(0, size - 1);
+				const startR = dir === "right" ? rnd(0, rows - 1) : rnd(0, maxStartR);
+				const startC = dir === "right" ? rnd(0, maxStartC) : rnd(0, cols - 1);
 				const result = tryPlaceEquation(
 					rawGrid,
-					size,
+					rows,
+					cols,
 					startR,
 					startC,
 					dir,
@@ -326,8 +337,8 @@ function generateRandomGrid(size: number): {
 		});
 	}
 
-	const grid: Grid = Array.from({ length: size }, (_, r) =>
-		Array.from({ length: size }, (_, c) => {
+	const grid: Grid = Array.from({ length: rows }, (_, r) =>
+		Array.from({ length: cols }, (_, c) => {
 			const val = rawGrid[r][c];
 			if (val === "B") return "B";
 			if (isSymbol(val as Symbol) || val === "=") return val;
@@ -338,8 +349,8 @@ function generateRandomGrid(size: number): {
 	);
 
 	const eqCounts: Record<string, number> = {};
-	for (let r = 0; r < size; r++) {
-		for (let c = 0; c < size; c++) {
+	for (let r = 0; r < rows; r++) {
+		for (let c = 0; c < cols; c++) {
 			const cell = grid[r][c];
 			const { value, eqs } = parseCell(cell);
 			if (value === "B" || isSymbol(value as Symbol) || value === "=") continue;
@@ -362,7 +373,8 @@ interface SavedGrid {
 	id: string;
 	name: string;
 	savedAt: number;
-	gridSize: number;
+	gridRows: number;
+	gridCols: number;
 	grid: Grid;
 	equations: Equations;
 	missingNumbers: number[];
@@ -387,7 +399,8 @@ interface ImportedLevel {
 	id: string;
 	name: string;
 	fileName: string;
-	gridSize: number;
+	gridRows: number;
+	gridCols: number;
 	grid: Grid;
 	equations: Equations;
 	missingNumbers: number[];
@@ -466,7 +479,8 @@ function parseImportFile(text: string, fileName: string): ImportedLevel[] {
 			id: `imp-${Date.now()}-${idx}-${Math.random().toString(36).slice(2)}`,
 			name: `Level ${idx + 1}`,
 			fileName,
-			gridSize: size,
+			gridRows: rowCount,
+			gridCols: colCount,
 			grid: typedGrid,
 			equations: typedEqs,
 			missingNumbers: typedMissing,
@@ -480,20 +494,25 @@ function parseImportFile(text: string, fileName: string): ImportedLevel[] {
 
 interface MiniGridPreviewProps {
 	grid: Grid;
-	gridSize: number;
+	gridRows: number;
+	gridCols: number;
 }
 
-const MiniGridPreview: FC<MiniGridPreviewProps> = ({ grid, gridSize }) => (
+const MiniGridPreview: FC<MiniGridPreviewProps> = ({
+	grid,
+	gridRows,
+	gridCols,
+}) => (
 	<div
 		style={{
 			padding: "8px 10px 6px",
 			display: "grid",
-			gridTemplateColumns: `repeat(${gridSize}, 1fr)`,
+			gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
 			gap: 2,
 		}}
 	>
-		{grid.slice(0, gridSize).map((row, r) =>
-			row.slice(0, gridSize).map((cell, c) => {
+		{grid.slice(0, gridRows).map((row, r) =>
+			row.slice(0, gridCols).map((cell, c) => {
 				const { value } = parseCell(cell);
 				const isB = value === "B";
 				const isOp = isSymbol(value as Symbol) || value === "=";
@@ -505,7 +524,7 @@ const MiniGridPreview: FC<MiniGridPreviewProps> = ({ grid, gridSize }) => (
 							aspectRatio: "1",
 							borderRadius: 3,
 							background: isB ? "#1a1a35" : isOp ? "#363650" : "#1a4a8a",
-							fontSize: Math.max(5, 9 - gridSize),
+							fontSize: Math.max(5, 9 - Math.max(gridRows, gridCols)),
 							color: isB ? "transparent" : isOp ? "#9090c0" : "#c0d8ff",
 							display: "flex",
 							alignItems: "center",
@@ -711,7 +730,11 @@ const SavedSidebar: FC<SavedSidebarProps> = ({
 										borderRadius: 10,
 									}}
 								>
-									<MiniGridPreview grid={s.grid} gridSize={s.gridSize} />
+									<MiniGridPreview
+										grid={s.grid}
+										gridRows={s.gridRows}
+										gridCols={s.gridCols}
+									/>
 									<div style={{ padding: "4px 10px 8px" }}>
 										<div
 											style={{
@@ -726,7 +749,7 @@ const SavedSidebar: FC<SavedSidebarProps> = ({
 										<div
 											style={{ color: "#6e6e9a", fontSize: 8, marginBottom: 6 }}
 										>
-											{s.gridSize}×{s.gridSize} · {eqCount} eq · {dateStr}
+											{s.gridRows}×{s.gridCols} · {eqCount} eq · {dateStr}
 										</div>
 										<div style={{ display: "flex", gap: 5 }}>
 											<button
@@ -849,7 +872,11 @@ const SavedSidebar: FC<SavedSidebarProps> = ({
 										borderRadius: 10,
 									}}
 								>
-									<MiniGridPreview grid={lv.grid} gridSize={lv.gridSize} />
+									<MiniGridPreview
+										grid={lv.grid}
+										gridRows={lv.gridRows}
+										gridCols={lv.gridCols}
+									/>
 									<div style={{ padding: "4px 10px 8px" }}>
 										<div
 											style={{
@@ -887,7 +914,7 @@ const SavedSidebar: FC<SavedSidebarProps> = ({
 										<div
 											style={{ color: "#6e6e9a", fontSize: 8, marginBottom: 2 }}
 										>
-											{lv.gridSize}×{lv.gridSize} · {eqCount} eq ·{" "}
+											{lv.gridRows}×{lv.gridCols} · {eqCount} eq ·{" "}
 											{lv.missingNumbers.length} missing
 										</div>
 										<div
@@ -1641,7 +1668,8 @@ const ExportPanel: FC<ExportPanelProps> = ({ content, onCopy, copied }) => (
 // ── App ───────────────────────────────────────────────────────────────────────
 
 const GridEditor: FC = () => {
-	const [gridSize, setGridSize] = useState<number>(11);
+	const [gridRows, setGridRows] = useState<number>(11);
+	const [gridCols, setGridCols] = useState<number>(11);
 	const [grid, setGrid] = useState<Grid>(() => EMPTY_GRID(11, 11));
 	const [equations, setEquations] = useState<Equations>({});
 	const [missingNumbers, setMissingNumbers] = useState<number[]>([]);
@@ -1664,12 +1692,12 @@ const GridEditor: FC = () => {
 		const formatFile: ImportedLevel[] = CORRETOS.map((item, idx) => {
 			const rowCount = item.grid.length;
 			const colCount = rowCount > 0 ? item.grid[0].length : 0;
-			const gridSize = Math.max(rowCount, colCount);
 			return {
 				id: `corretos-${idx}`,
 				name: `Level ${idx + 1}`,
 				fileName: "funcionais.ts",
-				gridSize,
+				gridRows: rowCount,
+				gridCols: colCount,
 				grid: item.grid,
 				equations: item.equations,
 				missingNumbers: item.missingNumbers,
@@ -1845,20 +1873,29 @@ const GridEditor: FC = () => {
 		return () => window.removeEventListener("mouseup", handleMouseUp);
 	}, [isDragging, dragCells, dragStartPrefilled]);
 
-	function handleSizeChange(newSize: number): void {
-		setGridSize(newSize);
+	function handleRowsChange(newRows: number): void {
+		setGridRows(newRows);
 		setGrid((prev) => {
-			const next: Grid = Array.from({ length: newSize }, (_, r) =>
-				Array.from({ length: newSize }, (_, c) =>
+			const cols = prev[0]?.length ?? gridCols;
+			return Array.from({ length: newRows }, (_, r) =>
+				Array.from({ length: cols }, (_, c) =>
 					prev[r] && prev[r][c] !== undefined ? prev[r][c] : "B",
 				),
 			);
-			return next;
 		});
-		setSelected((prev) => ({
-			r: Math.min(prev.r, newSize - 1),
-			c: Math.min(prev.c, newSize - 1),
-		}));
+		setSelected((prev) => ({ r: Math.min(prev.r, newRows - 1), c: prev.c }));
+	}
+
+	function handleColsChange(newCols: number): void {
+		setGridCols(newCols);
+		setGrid((prev) => {
+			return prev.map((row) =>
+				Array.from({ length: newCols }, (_, c) =>
+					row[c] !== undefined ? row[c] : "B",
+				),
+			);
+		});
+		setSelected((prev) => ({ r: prev.r, c: Math.min(prev.c, newCols - 1) }));
 	}
 
 	const setCell = useCallback((r: number, c: number, val: string): void => {
@@ -1878,7 +1915,7 @@ const GridEditor: FC = () => {
 
 			if (e.key === "ArrowRight") {
 				e.preventDefault();
-				setSelected({ r, c: Math.min(c + 1, gridSize - 1) });
+				setSelected({ r, c: Math.min(c + 1, gridCols - 1) });
 				return;
 			}
 			if (e.key === "ArrowLeft") {
@@ -1888,7 +1925,7 @@ const GridEditor: FC = () => {
 			}
 			if (e.key === "ArrowDown") {
 				e.preventDefault();
-				setSelected({ r: Math.min(r + 1, gridSize - 1), c });
+				setSelected({ r: Math.min(r + 1, gridRows - 1), c });
 				return;
 			}
 			if (e.key === "ArrowUp") {
@@ -1959,19 +1996,20 @@ const GridEditor: FC = () => {
 
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [selected, panel, setCell, gridSize]);
+	}, [selected, panel, setCell, gridRows, gridCols]);
 
 	function handleSave(): void {
 		const eqCount = Object.keys(equations).length;
 		const name =
 			saveLabel.trim() ||
-			`Grid ${saved.length + 1} (${gridSize}×${gridSize}, ${eqCount} eq)`;
+			`Grid ${saved.length + 1} (${gridRows}×${gridCols}, ${eqCount} eq)`;
 		const entry: SavedGrid = {
 			id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
 			name,
 			savedAt: Date.now(),
-			gridSize,
-			grid: grid.slice(0, gridSize).map((row) => row.slice(0, gridSize)),
+			gridRows,
+			gridCols,
+			grid: grid.slice(0, gridRows).map((row) => row.slice(0, gridCols)),
 			equations,
 			missingNumbers,
 		};
@@ -1982,7 +2020,8 @@ const GridEditor: FC = () => {
 	}
 
 	function handleLoadSaved(s: SavedGrid): void {
-		setGridSize(s.gridSize);
+		setGridRows(s.gridRows);
+		setGridCols(s.gridCols);
 		setGrid(s.grid);
 		setEquations(s.equations);
 		setMissingNumbers(s.missingNumbers);
@@ -2052,7 +2091,10 @@ const GridEditor: FC = () => {
 	}
 
 	function handleRandom(): void {
-		const { grid: newGrid, equations: newEqs } = generateRandomGrid(gridSize);
+		const { grid: newGrid, equations: newEqs } = generateRandomGrid(
+			gridRows,
+			gridCols,
+		);
 		setGrid(newGrid);
 		setEquations(newEqs);
 		setMissingNumbers([]);
@@ -2206,7 +2248,8 @@ const GridEditor: FC = () => {
 	}
 
 	function handleLoadImported(level: ImportedLevel): void {
-		setGridSize(level.gridSize);
+		setGridRows(level.gridRows);
+		setGridCols(level.gridCols);
 		setGrid(level.grid);
 		setEquations(level.equations);
 		setMissingNumbers(level.missingNumbers);
@@ -2222,10 +2265,11 @@ const GridEditor: FC = () => {
 				lv.id === editingImportedId
 					? {
 							...lv,
-							gridSize,
+							gridRows,
+							gridCols,
 							grid: grid
-								.slice(0, gridSize)
-								.map((row) => row.slice(0, gridSize)),
+								.slice(0, gridRows)
+								.map((row) => row.slice(0, gridCols)),
 							equations,
 							missingNumbers,
 						}
@@ -2309,41 +2353,95 @@ const GridEditor: FC = () => {
 					className="header-size-selector"
 					style={{
 						display: "flex",
-						alignItems: "center",
-						gap: 6,
+						flexDirection: "column",
+						gap: 4,
 						background: "#0f0f22",
 						border: "1px solid #1a1a30",
 						borderRadius: 8,
-						padding: "3px 10px 3px 6px",
+						padding: "6px 12px",
 					}}
 				>
-					<span style={{ color: "#6e6e9a", fontSize: 9, letterSpacing: 2 }}>
-						SIZE
-					</span>
-					<div style={{ display: "flex", gap: 2 }}>
-						{Array.from(
-							{ length: MAX_SIZE - MIN_SIZE + 1 },
-							(_, i) => MIN_SIZE + i,
-						).map((s) => (
-							<button
-								key={s}
-								onClick={() => handleSizeChange(s)}
-								style={{
-									width: 24,
-									height: 24,
-									borderRadius: 6,
-									cursor: "pointer",
-									background: gridSize === s ? "#6366f1" : "transparent",
-									border: "none",
-									color: gridSize === s ? "#fff" : "#6e6e9a",
-									fontSize: 9,
-									fontWeight: gridSize === s ? 700 : 400,
-									transition: "all .15s",
-								}}
-							>
-								{s}
-							</button>
-						))}
+					{/* Grid Width */}
+					<div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+						<span
+							style={{
+								color: "#6366f1",
+								fontSize: 8,
+								letterSpacing: 2,
+								fontWeight: 700,
+								width: 42,
+								flexShrink: 0,
+							}}
+						>
+							GRID W
+						</span>
+						<div style={{ display: "flex", gap: 2 }}>
+							{Array.from(
+								{ length: MAX_COLS - MIN_COLS + 1 },
+								(_, i) => MIN_COLS + i,
+							).map((s) => (
+								<button
+									key={s}
+									onClick={() => handleColsChange(s)}
+									style={{
+										width: 22,
+										height: 20,
+										borderRadius: 5,
+										cursor: "pointer",
+										background: gridCols === s ? "#6366f1" : "transparent",
+										border: gridCols === s ? "none" : "1px solid transparent",
+										color: gridCols === s ? "#fff" : "#4a4a70",
+										fontSize: 9,
+										fontWeight: gridCols === s ? 700 : 400,
+										transition: "all .15s",
+									}}
+								>
+									{s}
+								</button>
+							))}
+						</div>
+					</div>
+					{/* 1px divider */}
+					<div style={{ height: 1, background: "#1a1a30", margin: "1px 0" }} />
+					{/* Grid Height */}
+					<div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+						<span
+							style={{
+								color: "#10b981",
+								fontSize: 8,
+								letterSpacing: 2,
+								fontWeight: 700,
+								width: 42,
+								flexShrink: 0,
+							}}
+						>
+							GRID H
+						</span>
+						<div style={{ display: "flex", gap: 2 }}>
+							{Array.from(
+								{ length: MAX_ROWS - MIN_ROWS + 1 },
+								(_, i) => MIN_ROWS + i,
+							).map((s) => (
+								<button
+									key={s}
+									onClick={() => handleRowsChange(s)}
+									style={{
+										width: 22,
+										height: 20,
+										borderRadius: 5,
+										cursor: "pointer",
+										background: gridRows === s ? "#10b981" : "transparent",
+										border: gridRows === s ? "none" : "1px solid transparent",
+										color: gridRows === s ? "#fff" : "#4a4a70",
+										fontSize: 9,
+										fontWeight: gridRows === s ? 700 : 400,
+										transition: "all .15s",
+									}}
+								>
+									{s}
+								</button>
+							))}
+						</div>
 					</div>
 				</div>
 
@@ -2427,7 +2525,7 @@ const GridEditor: FC = () => {
 				<button
 					onClick={() => {
 						if (confirm("Clear grid?")) {
-							setGrid(EMPTY_GRID(gridSize, gridSize));
+							setGrid(EMPTY_GRID(gridRows, gridCols));
 							setMissingNumbers([]);
 						}
 					}}
@@ -2500,7 +2598,7 @@ const GridEditor: FC = () => {
 					)}
 
 					<div style={{ display: "flex", marginBottom: 3, marginLeft: 24 }}>
-						{Array.from({ length: gridSize }, (_, c) => (
+						{Array.from({ length: gridCols }, (_, c) => (
 							<div
 								key={c}
 								style={{
@@ -2516,7 +2614,7 @@ const GridEditor: FC = () => {
 						))}
 					</div>
 
-					{grid.slice(0, gridSize).map((row, r) => (
+					{grid.slice(0, gridRows).map((row, r) => (
 						<div
 							key={r}
 							style={{ display: "flex", alignItems: "center", marginBottom: 3 }}
@@ -2534,7 +2632,7 @@ const GridEditor: FC = () => {
 								{r}
 							</div>
 
-							{row.slice(0, gridSize).map((raw, c) => {
+							{row.slice(0, gridCols).map((raw, c) => {
 								const { value, eqs } = parseCell(raw);
 								const isBlank = value === "B";
 								const isSel = selected.r === r && selected.c === c;
@@ -2745,7 +2843,7 @@ const GridEditor: FC = () => {
 						</button>
 						<button
 							onClick={() => {
-								setGrid(EMPTY_GRID(gridSize, gridSize));
+								setGrid(EMPTY_GRID(gridRows, gridCols));
 								setEquations({});
 								setMissingNumbers([]);
 								setEditingImportedId(null);
