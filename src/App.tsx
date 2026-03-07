@@ -1360,10 +1360,12 @@ const CellPanel: FC<CellPanelProps> = ({
 
 interface EqPanelProps {
 	equations: Equations;
+	selected: Selected;
+	grid: Grid;
 	onChange: (eq: Equations) => void;
 }
 
-const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
+const EqPanel: FC<EqPanelProps> = ({ equations, selected, grid, onChange }) => {
 	const [newKey, setNewKey] = useState<string>("");
 	const [newVal, setNewVal] = useState<string>("");
 
@@ -1374,6 +1376,32 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
 		onChange({ ...equations, [k]: v });
 		setNewKey("");
 		setNewVal("");
+	}
+
+	// Derive info about the currently selected cell
+	const { r: selR, c: selC } = selected;
+	const rawCell = grid[selR]?.[selC] ?? "B";
+	const { value: selValue, eqs: selEqs } = parseCell(rawCell);
+	const coordStr = `${selR},${selC}`;
+
+	// Insert coord into newVal field
+	function insertCoord(): void {
+		setNewVal((prev) => {
+			if (!prev) return `2|${coordStr},${coordStr}`;
+			// If already has coords after "|", append this coord
+			const pipeIdx = prev.indexOf("|");
+			if (pipeIdx === -1) return prev + `|${coordStr},${coordStr}`;
+			// Replace last coord pair (r2,c2) with new coord
+			const parts = prev.slice(pipeIdx + 1).split(",");
+			if (parts.length >= 4) {
+				// Update end coords
+				const newCoords = [parts[0], parts[1], String(selR), String(selC)].join(
+					",",
+				);
+				return prev.slice(0, pipeIdx + 1) + newCoords;
+			}
+			return prev + `,${coordStr}`;
+		});
 	}
 
 	const label: CSSProperties = {
@@ -1417,12 +1445,119 @@ const EqPanel: FC<EqPanelProps> = ({ equations, onChange }) => {
 				style={{
 					flex: 1,
 					overflowY: "auto",
-					padding: "16px 18px",
+					padding: "12px 18px",
 					display: "flex",
 					flexDirection: "column",
 					gap: 7,
 				}}
 			>
+				{/* ── Selected cell info ── */}
+				<div
+					style={{
+						background: "#0f0f22",
+						border: "1px solid #1a1a30",
+						borderRadius: 10,
+						padding: "10px 12px",
+						marginBottom: 4,
+						display: "flex",
+						flexDirection: "column",
+						gap: 7,
+					}}
+				>
+					{/* Coord + value row */}
+					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+						<div
+							style={{
+								background: "#6366f120",
+								border: "1px solid #6366f140",
+								borderRadius: 6,
+								padding: "3px 10px",
+								color: "#6366f1",
+								fontSize: 12,
+								fontWeight: 700,
+								letterSpacing: 1,
+								flexShrink: 0,
+							}}
+						>
+							[{selR}, {selC}]
+						</div>
+						<div
+							style={{
+								flex: 1,
+								color:
+									selValue === "B"
+										? "#3a3a60"
+										: isSymbol(selValue)
+											? "#9090c0"
+											: "#e2f0ff",
+								fontSize: 13,
+								fontWeight: 700,
+								textAlign: "right",
+							}}
+						>
+							{selValue === "B" ? "empty" : selValue}
+						</div>
+					</div>
+
+					{/* Linked equations */}
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: 5,
+							flexWrap: "wrap",
+						}}
+					>
+						<span style={{ color: "#3a3a60", fontSize: 9, letterSpacing: 1 }}>
+							LINKED:
+						</span>
+						{selEqs.length === 0 ? (
+							<span style={{ color: "#2a2a48", fontSize: 9 }}>none</span>
+						) : (
+							selEqs.map((k) => {
+								const idx = Object.keys(equations).indexOf(k);
+								const col = EQ_COLORS[idx >= 0 ? idx % EQ_COLORS.length : 0];
+								return (
+									<span
+										key={k}
+										style={{
+											padding: "2px 7px",
+											borderRadius: 5,
+											background: col + "20",
+											border: `1px solid ${col}50`,
+											color: col,
+											fontSize: 9,
+											fontWeight: 700,
+										}}
+									>
+										{k}
+									</span>
+								);
+							})
+						)}
+					</div>
+
+					{/* Add coords button */}
+					<button
+						onClick={insertCoord}
+						style={{
+							padding: "6px 10px",
+							borderRadius: 7,
+							cursor: "pointer",
+							background: "#6366f110",
+							border: "1px solid #6366f135",
+							color: "#6366f1",
+							fontSize: 9,
+							fontWeight: 700,
+							letterSpacing: 1,
+							textAlign: "left",
+							transition: "all .15s",
+						}}
+					>
+						+ ADD [{selR},{selC}] TO NEW EQ
+					</button>
+				</div>
+
 				{Object.keys(equations).length === 0 && (
 					<div
 						style={{
@@ -2106,33 +2241,57 @@ const GridEditor: FC = () => {
 	// 1. Recomputes the count prefix in each equation ("2|..." → correct count)
 	// 2. Auto-fills missingNumbers from all eq-tagged numeric cells (unique values)
 	function handleRevise(): void {
-		// Use real grid dimensions
 		const rows = grid.length;
 		const cols = rows > 0 ? grid[0].length : 0;
 
-		// Count tagged numeric cells per eq key
+		// Scan every cell and collect, per eq key:
+		//   - count of numeric tagged cells
+		//   - bounding box (minR, minC, maxR, maxC) across ALL tagged cells (numeric + operator)
 		const eqCounts: Record<string, number> = {};
+		const eqBounds: Record<
+			string,
+			{ minR: number; minC: number; maxR: number; maxC: number }
+		> = {};
+
 		for (let r = 0; r < rows; r++) {
 			for (let c = 0; c < cols; c++) {
 				if (!grid[r]?.[c]) continue;
 				const { value, eqs } = parseCell(grid[r][c]);
-				if (
-					value === "B" ||
-					isSymbol(value) ||
-					value === "=" ||
-					isNaN(Number(value))
-				)
-					continue;
-				for (const k of eqs) eqCounts[k] = (eqCounts[k] ?? 0) + 1;
+				if (value === "B") continue;
+				const isNumeric =
+					!isSymbol(value) && value !== "=" && !isNaN(Number(value));
+				for (const k of eqs) {
+					// Update bounding box for every tagged cell
+					if (!eqBounds[k])
+						eqBounds[k] = { minR: r, minC: c, maxR: r, maxC: c };
+					else {
+						eqBounds[k].minR = Math.min(eqBounds[k].minR, r);
+						eqBounds[k].minC = Math.min(eqBounds[k].minC, c);
+						eqBounds[k].maxR = Math.max(eqBounds[k].maxR, r);
+						eqBounds[k].maxC = Math.max(eqBounds[k].maxC, c);
+					}
+					// Only count numeric cells
+					if (isNumeric) eqCounts[k] = (eqCounts[k] ?? 0) + 1;
+				}
 			}
 		}
 
-		// Fix "N|coords" prefix — drop equations with no tagged cells in the grid
+		// Rebuild equations from scratch based on what's actually in the grid.
+		// Any eq key found in the grid is included — even if it wasn't in equations state.
+		// Any eq key NOT found in the grid is dropped.
+		// Coordinates come from the bounding box of tagged cells.
 		const fixedEquations: Equations = {};
-		for (const [k, v] of Object.entries(equations)) {
-			if (!eqCounts[k]) continue; // no cells use this eq → remove it
-			const coordPart = v.split("|")[1] ?? "";
-			fixedEquations[k] = `${eqCounts[k]}|${coordPart}`;
+		const allKeys = new Set([...Object.keys(eqBounds)]);
+		// Sort keys naturally: eq1, eq2, ..., eq10, eq11, ...
+		const sortedKeys = Array.from(allKeys).sort((a, b) => {
+			const na = parseInt(a.replace(/\D/g, "")) || 0;
+			const nb = parseInt(b.replace(/\D/g, "")) || 0;
+			return na - nb;
+		});
+		for (const k of sortedKeys) {
+			if (!eqCounts[k]) continue; // no numeric cells → skip
+			const { minR, minC, maxR, maxC } = eqBounds[k];
+			fixedEquations[k] = `${eqCounts[k]}|${minR},${minC},${maxR},${maxC}`;
 		}
 
 		// Collect unique numeric values from eq-tagged cells (in grid order)
@@ -2994,7 +3153,12 @@ const GridEditor: FC = () => {
 						/>
 					)}
 					{panel === "eq" && (
-						<EqPanel equations={equations} onChange={setEquations} />
+						<EqPanel
+							equations={equations}
+							selected={selected}
+							grid={grid}
+							onChange={setEquations}
+						/>
 					)}
 					{panel === "export" && (
 						<ExportPanel content={exported} onCopy={doCopy} copied={copied} />
